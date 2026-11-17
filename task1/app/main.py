@@ -1,6 +1,8 @@
 import time
 import json
+import asyncio
 import logging
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -25,6 +27,7 @@ from task1.app.service import (
     get_account_usage,
     reconcile_account_usage
 )
+from task1.app.retry_worker import run_retry_worker
 
 # -------------------------------------------------------------
 # Structured Logging Configuration
@@ -36,13 +39,38 @@ logging.basicConfig(
 )
 logger = logging.getLogger("callzo.api")
 
-# Auto-create tables on startup (PostgreSQL or SQLite)
-Base.metadata.create_all(bind=engine)
+
+# -------------------------------------------------------------
+# Application Lifespan: Auto-migration & Background Retry Task
+# Spec: "Include a background job for retries"
+# -------------------------------------------------------------
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: Ensure database tables exist
+    try:
+        Base.metadata.create_all(bind=engine)
+        logger.info("Database schema verified/created successfully.")
+    except Exception as e:
+        logger.warning(f"Database schema initialization deferred: {str(e)}")
+
+    # Start background retry worker
+    worker_task = asyncio.create_task(run_retry_worker(poll_interval_seconds=15))
+    logger.info("Application startup complete. Background retry worker active.")
+    yield
+    # Shutdown: gracefully terminate background task
+    worker_task.cancel()
+    try:
+        await worker_task
+    except asyncio.CancelledError:
+        pass
+    logger.info("Application shutdown clean.")
+
 
 app = FastAPI(
     title="Callzo Usage Metering API",
     description="Production-grade usage metering, idempotency, out-of-order event handling, and spending cap service.",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
 )
 
 # -------------------------------------------------------------
@@ -239,4 +267,3 @@ def health_check(db: Session = Depends(get_db)):
         database_connected=db_ok,
         timestamp=datetime.now(timezone.utc)
     )
-

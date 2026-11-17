@@ -64,33 +64,38 @@ def process_webhook_event(
       2. Out-of-order lifecycle (call.ended before call.started)
       3. Late events (~35 days old: audited, billed to current month as adjustment)
       4. Monthly cap enforcement (burst scenario: graceful completion, blocking new starts)
+      5. Retries: If event was pending_retry, resumes processing without failing unique PK.
     """
     # -------------------------------------------------------------
-    # 1. IDEMPOTENCY CHECK (Duplicate Prevention)
+    # 1. IDEMPOTENCY & RETRY CHECK
     # -------------------------------------------------------------
     existing_event = db.query(RawEvent).filter_by(event_id=event.event_id).first()
     if existing_event:
-        logger.info(f"Duplicate event received and ignored: event_id={event.event_id}")
-        return {
-            "status": "success",
-            "message": "Duplicate event detected and safely ignored (idempotent)",
-            "event_id": event.event_id,
-            "action_taken": "duplicate_ignored"
-        }
+        if existing_event.processed_status == "processed":
+            logger.info(f"Duplicate event received and ignored: event_id={event.event_id}")
+            return {
+                "status": "success",
+                "message": "Duplicate event detected and safely ignored (idempotent)",
+                "event_id": event.event_id,
+                "action_taken": "duplicate_ignored"
+            }
+        else:
+            # Event was previously marked pending_retry; update status to processed
+            existing_event.processed_status = "processed"
+    else:
+        # Safely convert to pure JSON serializable dict for audit storage
+        audit_payload = event.model_dump(mode="json")
 
-    # Safely convert to pure JSON serializable dict for audit storage
-    audit_payload = event.model_dump(mode="json")
-
-    # Record event in immutable raw_events table for auditing and reconciliation
-    raw_event_record = RawEvent(
-        event_id=event.event_id,
-        event_type=event.event_type.value,
-        account_id=event.account_id,
-        call_id=event.call_id,
-        payload=audit_payload,
-        processed_status="processed"
-    )
-    db.add(raw_event_record)
+        # Record event in immutable raw_events table for auditing and reconciliation
+        raw_event_record = RawEvent(
+            event_id=event.event_id,
+            event_type=event.event_type.value,
+            account_id=event.account_id,
+            call_id=event.call_id,
+            payload=audit_payload,
+            processed_status="processed"
+        )
+        db.add(raw_event_record)
 
     # -------------------------------------------------------------
     # 2. BILLING PERIOD & LATE EVENT DETERMINATION

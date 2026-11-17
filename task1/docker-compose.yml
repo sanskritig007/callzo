@@ -1,0 +1,56 @@
+services:
+  # -------------------------------------------------------------
+  # 1. PostgreSQL Database Service
+  # -------------------------------------------------------------
+  db:
+    image: postgres:16-alpine
+    container_name: callzo-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: callzo_user
+      POSTGRES_PASSWORD: callzo_password
+      POSTGRES_DB: callzo_metering
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U callzo_user -d callzo_metering"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # -------------------------------------------------------------
+  # 2. Callzo Usage Metering API Service (FastAPI)
+  # -------------------------------------------------------------
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://callzo_user:callzo_password@db:5432/callzo_metering
+      - WEBHOOK_SECRET=callzo_test_secret_change_me
+      - API_KEY=callzo_live_api_key_secure_123
+      - DEFAULT_MONTHLY_CAP_CENTS=5000
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # -------------------------------------------------------------
+  # 3. Callzo Official Webhook Simulator
+  # Replaces the placeholder and fires test scenarios against api
+  # -------------------------------------------------------------
+  simulator:
+    image: meetrj/callzo-webhook-simulator
+    container_name: simulator
+    depends_on:
+      - api
+    command: ["--url", "http://api:8000/webhooks/calls", "--scenario", "all"]
+
+volumes:
+  postgres_data:
+
