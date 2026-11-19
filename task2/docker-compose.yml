@@ -1,0 +1,28 @@
+services:
+  # -------------------------------------------------------------
+  # 1. Callzo Official Mock Usage API
+  # -------------------------------------------------------------
+  mock-api:
+    image: meetrj/callzo-mock-usage-api
+    container_name: mock-api
+    ports:
+      - "8001:8001"
+    restart: unless-stopped
+
+  # -------------------------------------------------------------
+  # 2. Callzo Admin Console Frontend (React + Nginx)
+  # -------------------------------------------------------------
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: sanskritig007/callzo-task2-frontend:latest
+    container_name: frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - mock-api
+    environment:
+      - VITE_API_URL=http://localhost:8001
+    restart: unless-stopped
+
